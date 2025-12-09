@@ -1,4 +1,65 @@
+export interface ConfigSourceData {
+  asset_id: number;
+  source_type: string; // 'api', 'contract', etc.
+  endpoint_url: string;
+  last_synced?: number;
+  config_json?: any;
+  status?: string;
+}
+
+export interface ConfigSourceRow extends ConfigSourceData {
+  id: number;
+  last_synced: number | null;
+  config_json: any;
+  status: string;
+  created_at: Date;
+}
 // Type definitions for the staking system
+
+export interface AssetData {
+  symbol: string;
+  name: string;
+  chain: string;
+  decimals?: number;
+  min_amount?: number;
+  max_amount?: number | null;
+  is_active?: boolean;
+}
+
+export interface AssetRow extends AssetData {
+  id: number;
+  decimals: number;
+  min_amount: number;
+  max_amount: number | null;
+  is_active: boolean;
+  created_at: Date;
+}
+
+export interface StakingOfferData {
+  asset_id: number;
+  term_code: string; // e.g., '6m'
+  lock_seconds: number;
+  apr: number;
+  reward_payout_freq?: string; // e.g., 'DAILY'
+  auto_renew_allowed?: boolean;
+  early_unstake_allowed?: boolean;
+  early_unstake_penalty?: number;
+  min_amount?: number;
+  max_amount?: number | null;
+  status?: string;
+}
+
+export interface StakingOfferRow extends StakingOfferData {
+  id: number;
+  reward_payout_freq: string;
+  auto_renew_allowed: boolean;
+  early_unstake_allowed: boolean;
+  early_unstake_penalty: number;
+  min_amount: number;
+  max_amount: number | null;
+  status: string;
+  created_at: Date;
+}
 
 export interface StakeData {
   stake_id: number;
@@ -16,6 +77,10 @@ export interface StakeData {
   reward_index?: number;
   lastClaimed?: number | null;
   totalRedeemed?: number;
+  asset_id?: number | null;
+  offer_id?: number | null;
+  autoRenew?: boolean;
+  rewardPayoutFreq?: string;
 }
 
 export interface StakeRow extends StakeData {
@@ -25,6 +90,8 @@ export interface StakeRow extends StakeData {
   reward_index: number;
   last_claimed: number | null;
   total_redeemed: number;
+  auto_renew: boolean;
+  reward_payout_freq: string;
   created_at: Date;
 }
 
