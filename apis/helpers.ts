@@ -1,5 +1,5 @@
 // Helper functions for formatting and chain logic
-import { StakeRow } from '../types';
+import { StakeRow } from '../types/index';
 
 // For fast testing: 365 days = 30 minutes
 export const TEST_YEAR_SECONDS = 30 * 60; // 30 minutes as 1 year

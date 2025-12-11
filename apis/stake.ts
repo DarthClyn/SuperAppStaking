@@ -8,13 +8,6 @@ import { contract } from '../config'; // Using the Admin-connected contract
 import { ethers } from 'ethers';
 
 
-// Helper: Calculate Reward
-const calculateReward = (principalWei: bigint, apr: number, days: number): bigint => {
-    const principal = Number(ethers.formatEther(principalWei));
-    const interest = principal * (apr / 100) * (days / 365);
-    return ethers.parseEther(interest.toFixed(18));
-};
-
 // 1. GET ALL STAKES (For CLI List)
 router.get('/', async (_req: Request, res: Response) => {
     const result = await pool.query(`
@@ -49,37 +42,33 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     let { user_id, tier_id, amount } = req.body; 
     user_id = user_id.toLowerCase();
     try {
-        await pool.query('BEGIN');
+        // Atomic lock: deduct available balance only if sufficient
         const amountWei = ethers.parseEther(amount.toString());
 
-        // Check Balance
-        const userRes = await pool.query('SELECT available_balance_wei FROM users WHERE wallet_address = $1', [user_id]);
-        if (userRes.rows.length === 0) throw new Error("User not found (Deposit ETH first)");
-        
-        const currentBalance = BigInt(userRes.rows[0].available_balance_wei);
-        if (currentBalance < amountWei) throw new Error("Insufficient available balance");
-
-        // Get Tier Info
         const tierRes = await pool.query('SELECT * FROM tiers WHERE id = $1', [tier_id]);
         if (tierRes.rows.length === 0) throw new Error("Invalid Tier ID");
         const tier = tierRes.rows[0];
 
-        // Calc Expiry & Reward
-        const startTime = new Date();
-        const endTime = new Date(startTime.getTime() + (tier.duration_days * 24 * 60 * 60 * 1000));
-        const projectedReward = calculateReward(amountWei, parseFloat(tier.apr_percentage), tier.duration_days);
+        await pool.query('BEGIN');
+        const upd = await pool.query(
+            `UPDATE users SET available_balance_wei = available_balance_wei - $1
+             WHERE wallet_address = $2 AND available_balance_wei >= $1
+             RETURNING available_balance_wei`,
+            [amountWei.toString(), user_id]
+        );
+        if (upd.rows.length === 0) throw new Error('Insufficient available balance or user not found');
 
-        // Deduct Balance
-        await pool.query('UPDATE users SET available_balance_wei = available_balance_wei - $1 WHERE wallet_address = $2', [amountWei.toString(), user_id]);
-        
-        // Create Stake
+        // Insert stake as REQUESTED; actual start_time and projected_reward will be set when activated
         const newStake = await pool.query(`
-            INSERT INTO stakes (user_address, tier_id, amount_wei, start_time, end_time, projected_reward_wei)
-            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
-        `, [user_id, tier_id, amountWei.toString(), startTime, endTime, projectedReward.toString()]);
+            INSERT INTO stakes (user_address, tier_id, amount_wei, requested_at, status)
+            VALUES ($1, $2, $3, NOW(), 'REQUESTED') RETURNING *
+        `, [user_id, tier_id, amountWei.toString()]);
 
         await pool.query('COMMIT');
-        res.json({ success: true, stake: newStake.rows[0] });
+        // calculate expected expiry for client convenience
+        const waitingSeconds = tier.waiting_period_seconds || 604800;
+        const expectedExpiry = new Date(Date.now() + waitingSeconds * 1000);
+        res.json({ success: true, stake: newStake.rows[0], expectedExpiry: expectedExpiry.toISOString() });
 
     } catch (err: any) {
         await pool.query('ROLLBACK');

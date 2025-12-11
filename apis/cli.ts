@@ -2,6 +2,7 @@
 import axios from 'axios';
 import * as readline from 'readline';
 import { formatTime } from './helpers';
+import { ethers } from 'ethers';
 
 const BASE = 'http://localhost:3001';
 
@@ -30,10 +31,12 @@ async function getPortfolio(user: string) {
             console.log('\nActive Stakes:');
             stakes.forEach((s: any) => {
                 const amountWei = s.amount_wei || s.amount || '0';
-                const amountEth = (BigInt(String(amountWei)) / 1000000000000000000n).toString();
+                // Show fractional ETH accurately
+                const amountEth = ethers.formatEther(BigInt(String(amountWei)));
+                const requested = s.requested_at ? formatTime(s.requested_at) : 'N/A';
                 const start = s.start_time ? formatTime(s.start_time) : 'N/A';
                 const end = s.end_time ? formatTime(s.end_time) : 'N/A';
-                console.log(`- ID:${s.id} Tier:${s.tier_name || s.tier_id} Amount:${amountEth} ETH Start:${start} End:${end} Status:${s.status}`);
+                console.log(`- ID:${s.id} Tier:${s.tier_name || s.tier_id} Amount:${amountEth} ETH Requested:${requested} Start:${start} End:${end} Status:${s.status}`);
             });
         }
     } catch (e: any) { console.log(e.message); }
