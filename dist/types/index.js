@@ -1,4 +1,0 @@
-"use strict";
-// Type definitions for the staking system
-Object.defineProperty(exports, "__esModule", { value: true });
-//# sourceMappingURL=index.js.map

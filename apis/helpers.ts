@@ -9,27 +9,52 @@ export function formatAmount(amt: number): string {
   return `${amt} ETH`;
 }
 
-export function formatTime(ts: number): string {
-  return new Date(ts).toISOString();
+export function formatTime(ts: number | string | Date): string {
+  // Normalize to Date
+  const d = typeof ts === 'number' ? new Date(ts) : new Date(ts as any);
+  try {
+    // Format to India Standard Time (IST) using Intl with Asia/Kolkata timezone
+    const parts = new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(d);
+    return `${parts} IST`;
+  } catch (e) {
+    // Fallback to ISO if Intl or timezone unsupported
+    return d.toISOString();
+  }
 }
 
-export function calcUserReward(stake: StakeRow, now: number = Date.now()): number {
+export function calcUserReward(stake: StakeRow, totalRewards: number, now: number = Date.now()): number {
   // Calculate seconds staked since lastClaimed
-  const since = (stake.last_claimed as any) || stake.start_time;
-
+  const since = stake.last_claimed || stake.start_time;
+  
   // For fixed-term stakes, cap reward calculation at end_time
   let rewardEndTime = now;
   if (stake.end_time && stake.end_time > 0) {
+    // If lock period has ended, cap rewards at end_time
     rewardEndTime = Math.min(now, stake.end_time);
   }
-
+  
+  // Calculate only rewards earned up to rewardEndTime
   const secondsStaked = Math.floor((rewardEndTime - since) / 1000);
-  if (secondsStaked <= 0) return 0;
-
+  
+  // If already past end_time and all rewards claimed, return 0
+  if (secondsStaked <= 0) {
+    return 0;
+  }
+  
   const daysStaked = secondsStaked / TEST_DAY_SECONDS;
-  const apy = parseFloat((stake.apr as any).toString());
-  const principal = parseFloat((stake.amount as any).toString());
-  const annualReward = (principal * apy) / 100;
+  const apy = stake.apr;
+  const annualReward = (parseFloat(stake.amount.toString()) * apy) / 100;
   const proportionalReward = (annualReward * daysStaked) / 365;
-  return proportionalReward;
+  const earned = proportionalReward;
+  // Cap by totalRewards if needed
+  return Math.min(earned, totalRewards);
 }
