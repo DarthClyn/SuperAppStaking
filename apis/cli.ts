@@ -19,11 +19,13 @@ let currentUser: string | null = null;
 
 async function getPortfolio(user: string) {
     try {
+        console.log(`\nFetching portfolio for ${user} from ${BASE}/stake/portfolio/${user} at ${new Date().toISOString()}`);
         const res = await axios.get(`${BASE}/stake/portfolio/${user}`);
         console.log(`\n--- Portfolio for ${user} ---`);
-        // Convert Wei to ETH for display
-        const balEth = (BigInt(res.data.walletBalance) / 1000000000000000000n).toString(); 
-        console.log(`Floating Balance: ${balEth} ETH (Available to Stake)`);
+        // Convert Wei to ETH for display (use ethers.formatEther for precision)
+        const balWei = res.data.walletBalance || '0';
+        const balEth = ethers.formatEther(BigInt(String(balWei)));
+        console.log(`Floating Balance: ${balEth} ETH (Available to Stake)  [fetched_at=${res.data.fetched_at} source=${res.data.source}]`);
         const stakes = res.data.stakes || [];
         if (stakes.length === 0) {
             console.log('No active stakes');

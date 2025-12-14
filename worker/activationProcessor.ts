@@ -1,7 +1,7 @@
 import { pool } from '../database/connect';
-import { initializeTables } from '../database/models';
-import { contract, provider, CONTRACT_ADDRESS } from '../config';
-import { ethers } from 'ethers';
+// initializeTables is invoked by the main process (listener) to avoid duplicate migrations
+// we intentionally do not call it here to avoid concurrent schema changes
+import { } from '../config';
 
 async function sleep(ms: number) { return new Promise(res => setTimeout(res, ms)); }
 
@@ -25,21 +25,10 @@ async function processOnce() {
     for (const tier of tiersRes.rows) {
         const tierId = tier.id;
         const waitingSeconds = tier.waiting_period_seconds || 604800;
-        const thresholdWei = BigInt(tier.activation_threshold_wei || '0');
 
-        // Sum unbatched amounts (stakes not yet included in an on-chain batch)
-        const sumRes = await pool.query(`SELECT COALESCE(SUM(amount_wei),0)::text as total FROM stakes WHERE onchain_batched_at IS NULL AND tier_id = $1 AND status IN ('REQUESTED','ACTIVE','ENDED')`, [tierId]);
-        const totalUnbatched = BigInt(sumRes.rows[0].total || '0');
+        // (quiet) on-chain batching removed; skip per-loop totals to avoid spam
 
-        // Log totals for debugging (show ETH values)
-        try {
-            const totalEth = ethers.formatEther(totalUnbatched);
-            const thresholdEth = ethers.formatEther(thresholdWei);
-            console.log(`Tier ${tier.name} (${tierId}) unbatched total ${totalUnbatched} wei (${totalEth} ETH) threshold ${thresholdWei} wei (${thresholdEth} ETH)`);
-        } catch (e) {
-            console.log(`Tier ${tier.name} (${tierId}) unbatched total ${totalUnbatched} wei; threshold ${thresholdWei} wei`);
-        }
-
+            // (quiet) Do not log pooled totals each loop to avoid spam; only log significant events below.
         
         // Activate REQUESTED stakes whose waiting period has elapsed (set start_time based on requested_at + waiting)
         try {
@@ -62,57 +51,9 @@ async function processOnce() {
             console.error('Error activating requested stakes:', err);
         }
 
-        // After activation, check unbatched total and, if threshold met, call on-chain batch for unbatched stakes
-        try {
-            const poolSumRes = await pool.query(`SELECT COALESCE(SUM(amount_wei),0)::text as total FROM stakes WHERE onchain_batched_at IS NULL AND tier_id = $1 AND status IN ('REQUESTED','ACTIVE','ENDED')`, [tierId]);
-            const poolTotal = BigInt(poolSumRes.rows[0].total || '0');
-            if (poolTotal >= thresholdWei && poolTotal > 0n) {
-                const rows = await pool.query(`SELECT * FROM stakes WHERE onchain_batched_at IS NULL AND tier_id = $1 AND status IN ('REQUESTED','ACTIVE','ENDED') FOR UPDATE`, [tierId]);
-                if (rows.rows.length > 0) {
-                    const count = rows.rows.length;
-                    const pubkeys = new Array(count).fill('0x');
-                    const signatures = new Array(count).fill('0x');
-                    const depositRoots = new Array(count).fill('0x' + '00'.repeat(32));
-                    console.log(`Threshold reached for tier ${tier.name} (${tierId}). Calling on-chain batch for ${count} entries`);
-                    if (typeof contract.batchStakeToDBeacon === 'function') {
-                        try {
-                            const contractAddr = CONTRACT_ADDRESS;
-                            const bal = await provider.getBalance(contractAddr);
-                            const contractBalance = BigInt(bal.toString());
-                            const perEntry = BigInt(ethers.parseEther('0.032').toString());
-                            const required = perEntry * BigInt(count);
-                            if (contractBalance < required) {
-                                console.warn(`Skipping on-chain batch: contract balance ${ethers.formatEther(contractBalance)} ETH < required ${ethers.formatEther(required)} ETH`);
-                            } else {
-                                const tx = await contract.batchStakeToDBeacon(pubkeys, signatures, depositRoots);
-                                console.log(`batchStakeToDBeacon tx sent ${tx.hash}, waiting...`);
-                                await tx.wait();
-                                console.log('batchStakeToDBeacon confirmed');
-                                // mark these stakes as batched on-chain and record tx in DB
-                                const nowTs = new Date();
-                                let totalAmount = 0n;
-                                for (const s of rows.rows) {
-                                    totalAmount += BigInt(s.amount_wei);
-                                }
-                                await pool.query('BEGIN');
-                                for (const s of rows.rows) {
-                                    await pool.query(`UPDATE stakes SET onchain_batched_at=$1 WHERE id=$2`, [nowTs, s.id]);
-                                }
-                                await pool.query(`INSERT INTO transactions (tx_hash, user_address, type, amount_wei) VALUES ($1, NULL, 'BATCH_STAKE', $2)`, [tx.hash, totalAmount.toString()]);
-                                await pool.query('COMMIT');
-                            }
-                        } catch (err) {
-                            console.error('Error while preparing or sending batchStakeToDBeacon:', err);
-                            try { await pool.query('ROLLBACK'); } catch (e) {}
-                        }
-                    } else {
-                        console.warn('contract.batchStakeToDBeacon() is not available on contract instance — check ABI / contract address');
-                    }
-                }
-            }
-        } catch (err) {
-            console.error('Error checking/performing on-chain batch:', err);
-        }
+        // On-chain batching removed: pooling/threshold logic deprecated.
+        // We keep activation of requested stakes, and record stats only.
+            // On-chain batching removed; skip periodic pooled total logging to reduce noise.
 
         // Process UNSTAKE_REQUESTED stakes whose delay has elapsed
         try {
@@ -120,8 +61,8 @@ async function processOnce() {
             const unstakeRes = await pool.query(`SELECT s.*, t.unstake_delay_seconds, t.apr_percentage, t.duration_days, t.name as tier_name FROM stakes s JOIN tiers t ON s.tier_id = t.id WHERE s.status = 'UNSTAKE_REQUESTED' AND s.tier_id = $1 AND (unstake_requested_at + make_interval(secs => t.unstake_delay_seconds)) <= $2 FOR UPDATE`, [tierId, now]);
             if (unstakeRes.rows.length > 0) {
                 for (const s of unstakeRes.rows) {
+                    await pool.query('BEGIN');
                     try {
-                        await pool.query('BEGIN');
                         // Compute principal payout and auto-claim any accrued rewards up to now
                         const principal = BigInt(s.amount_wei);
                         let claimable = 0n;
@@ -145,59 +86,26 @@ async function processOnce() {
                             console.warn('Failed to compute claimable rewards during unstake, proceeding with principal only', e);
                         }
 
-                        // Check contract balance
-                        let contractBalance = 0n;
-                        try {
-                            const contractAddr = CONTRACT_ADDRESS;
-                            const bal = await provider.getBalance(contractAddr);
-                            contractBalance = BigInt(bal.toString());
-                        } catch (e) {
-                            console.warn('Could not read contract balance before unstake payout:', e);
-                        }
-
+                        // Payout via platform balance only (DB-only)
                         const payoutAmount = principal + claimable;
-                        if (typeof contract.payoutUser === 'function' && contractBalance >= payoutAmount) {
-                            try {
-                                const tx = await contract.payoutUser(s.user_address, payoutAmount);
-                                console.log(`Unstake payout tx sent for stake ${s.id}: ${tx.hash}, waiting...`);
-                                await tx.wait();
-
-                                await pool.query(`UPDATE stakes SET status='COMPLETED' WHERE id = $1`, [s.id]);
-                                await pool.query(`INSERT INTO transactions (tx_hash, user_address, type, amount_wei) VALUES ($1, $2, 'UNSTAKE_PAYOUT', $3)`, [tx.hash, s.user_address, payoutAmount.toString()]);
-                                if (claimable > 0n) {
-                                    await pool.query(`INSERT INTO transactions (tx_hash, user_address, type, amount_wei) VALUES ($1, $2, 'CLAIM', $3)`, [tx.hash, s.user_address, claimable.toString()]);
-                                    const lastSet = s.end_time ? new Date(s.end_time) : new Date();
-                                    await pool.query(`UPDATE stakes SET last_claimed = $1 WHERE id = $2`, [lastSet, s.id]);
-                                }
-                                await pool.query('COMMIT');
-                                console.log(`Unstaked stake ${s.id} to ${s.user_address} on-chain tx ${tx.hash}`);
-                            } catch (err) {
-                                await pool.query('ROLLBACK');
-                                console.error('On-chain unstake payout failed for stake', s.id, err);
-                                try { await pool.query('BEGIN'); await pool.query(`UPDATE stakes SET status='UNSTAKE_FAILED' WHERE id = $1`, [s.id]); await pool.query('COMMIT'); } catch (e) { await pool.query('ROLLBACK'); }
-                            }
-                        } else {
-                            // Credit user's platform balance (principal + claimable)
-                            const totalLocal = payoutAmount;
-                            await pool.query(`UPDATE users SET available_balance_wei = available_balance_wei + $1 WHERE wallet_address = $2`, [totalLocal.toString(), s.user_address]);
-                            await pool.query(`UPDATE stakes SET status='COMPLETED' WHERE id = $1`, [s.id]);
-                            await pool.query(`INSERT INTO transactions (tx_hash, user_address, type, amount_wei) VALUES (NULL, $1, 'UNSTAKE_PAYOUT', $2)`, [s.user_address, totalLocal.toString()]);
-                            if (claimable > 0n) {
-                                await pool.query(`INSERT INTO transactions (tx_hash, user_address, type, amount_wei) VALUES (NULL, $1, 'CLAIM', $2)`, [s.user_address, claimable.toString()]);
-                                const lastSet = s.end_time ? new Date(s.end_time) : new Date();
-                                await pool.query(`UPDATE stakes SET last_claimed = $1 WHERE id = $2`, [lastSet, s.id]);
-                            }
-                            await pool.query('COMMIT');
-                            console.log(`Unstaked stake ${s.id} to ${s.user_address} via platform balance`);
+                        const totalLocal = payoutAmount;
+                        await pool.query(`UPDATE users SET available_balance_wei = available_balance_wei + $1 WHERE wallet_address = $2`, [totalLocal.toString(), s.user_address]);
+                        await pool.query(`UPDATE stakes SET status='COMPLETED' WHERE id = $1`, [s.id]);
+                        await pool.query(`INSERT INTO transactions (tx_hash, user_address, type, amount_wei) VALUES (NULL, $1, 'UNSTAKE_PAYOUT', $2)`, [s.user_address, totalLocal.toString()]);
+                        if (claimable > 0n) {
+                            await pool.query(`INSERT INTO transactions (tx_hash, user_address, type, amount_wei) VALUES (NULL, $1, 'CLAIM', $2)`, [s.user_address, claimable.toString()]);
+                            const lastSet = s.end_time ? new Date(s.end_time) : new Date();
+                            await pool.query(`UPDATE stakes SET last_claimed = $1 WHERE id = $2`, [lastSet, s.id]);
                         }
+                        await pool.query('COMMIT');
+                        console.log(`Unstaked stake ${s.id} to ${s.user_address} via platform balance (DB-only)`);
                     } catch (err) {
                         try { await pool.query('ROLLBACK'); } catch (e) {}
-                        console.error('Error processing unstake payout for stake', s.id, err);
+                        console.error('Error processing DB-only unstake payout for stake', s.id, err);
                     }
                 }
             }
         } catch (err) {
-            try { await pool.query('ROLLBACK'); } catch (e) {}
             console.error('Error processing UNSTAKE_REQUESTED stakes:', err);
         }
 
@@ -224,9 +132,8 @@ async function processOnce() {
 }
 
 
-async function runLoop() {
+export async function runLoop() {
     console.log('Activation processor starting...');
-    await initializeTables();
     while (true) {
         try {
             await processOnce();
@@ -237,5 +144,3 @@ async function runLoop() {
         await sleep(15000);
     }
 }
-
-runLoop();

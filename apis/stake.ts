@@ -4,7 +4,7 @@ import { Request, Response } from 'express'; // Keep named imports separate for 
 const router = express.Router(); // This now correctly accesses the Router function
 
 import { pool } from '../database/connect';
-import { contract, provider, CONTRACT_ADDRESS } from '../config';
+import { } from '../config';
 import { ethers } from 'ethers';
 
 // Local reward calc (integer math)
@@ -41,9 +41,15 @@ router.get('/portfolio/:address', async (req: Request, res: Response) => {
         WHERE s.user_address = $1
     `, [address]);
 
+    const balance = user.rows[0] ? user.rows[0].available_balance_wei : '0';
+    const fetchedAt = new Date().toISOString();
+    console.log(`Portfolio requested for ${address} -> available_balance_wei=${balance} at ${fetchedAt} (source=db)`);
+
     res.json({
-        walletBalance: user.rows[0] ? user.rows[0].available_balance_wei : '0',
-        stakes: activeStakes.rows
+        walletBalance: balance,
+        stakes: activeStakes.rows,
+        fetched_at: fetchedAt,
+        source: 'db'
     });
 });
 
@@ -156,30 +162,12 @@ router.post('/claim', async (req: Request, res: Response): Promise<void> => {
             const newLast = new Date(effectiveStart + intervals * accrualInterval * 1000);
             await pool.query(`UPDATE stakes SET last_claimed = $1 WHERE id = $2`, [newLast, s.id]);
 
-            // Attempt on-chain payout for the claim; fallback to platform credit
-            let txHash: string | null = null;
-                try {
-                const contractAddr = CONTRACT_ADDRESS;
-                const bal = await provider.getBalance(contractAddr);
-                const contractBalance = BigInt(bal.toString());
-                if (typeof contract.payoutUser === 'function' && contractBalance >= claimable) {
-                    const tx = await contract.payoutUser(addr, claimable);
-                    await tx.wait();
-                    txHash = tx.hash;
-                    await pool.query(`INSERT INTO transactions (tx_hash, user_address, type, amount_wei) VALUES ($1, $2, 'CLAIM', $3)`, [txHash, addr, claimable.toString()]);
-                } else {
-                    // fallback to crediting platform balance
-                    await pool.query(`UPDATE users SET available_balance_wei = available_balance_wei + $1 WHERE wallet_address = $2`, [claimable.toString(), addr]);
-                    await pool.query(`INSERT INTO transactions (tx_hash, user_address, type, amount_wei) VALUES (NULL, $1, 'CLAIM', $2)`, [addr, claimable.toString()]);
-                }
-            } catch (e) {
-                // If on-chain payout fails, fallback to platform credit
-                try {
-                    await pool.query(`UPDATE users SET available_balance_wei = available_balance_wei + $1 WHERE wallet_address = $2`, [claimable.toString(), addr]);
-                    await pool.query(`INSERT INTO transactions (tx_hash, user_address, type, amount_wei) VALUES (NULL, $1, 'CLAIM', $2)`, [addr, claimable.toString()]);
-                } catch (ee) {
-                    console.error('Failed to credit user after claim failure', ee);
-                }
+            // Credit user's platform balance for the claim (DB-only)
+            try {
+                await pool.query(`UPDATE users SET available_balance_wei = available_balance_wei + $1 WHERE wallet_address = $2`, [claimable.toString(), addr]);
+                await pool.query(`INSERT INTO transactions (tx_hash, user_address, type, amount_wei) VALUES (NULL, $1, 'CLAIM', $2)`, [addr, claimable.toString()]);
+            } catch (ee) {
+                console.error('Failed to credit user for claim', ee);
             }
             totalClaimed += claimable;
         }

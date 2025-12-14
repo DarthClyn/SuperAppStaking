@@ -3,6 +3,7 @@ import { contract, CONTRACT_ADDRESS } from './config'; // Imports the provider/c
 import { pool } from './database/connect';
 import { ethers } from 'ethers';
 import { initializeTables } from './database/models';
+import { runLoop } from './worker/activationProcessor';
 async function startListener() {
     console.log("Creating tables if not exist...");
     // Ensure tables exist before listening
@@ -53,4 +54,11 @@ async function startListener() {
     });
 }
 
-startListener();
+// Start both the listener and the activation processor in same process
+async function startAll() {
+    await startListener();
+    // start activation processor loop (non-blocking)
+    runLoop().catch(err => console.error('Activation processor failed:', err));
+}
+
+startAll();
