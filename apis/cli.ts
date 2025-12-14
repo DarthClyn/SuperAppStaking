@@ -65,9 +65,26 @@ async function unstake() {
     try {
         console.log("Processing payout... (this may take a few seconds for blockchain confirmation)");
         const res = await axios.post(`${BASE}/stake/unstake/${stake_id}`, {});
-        console.log('✅ Unstake/Payout Successful!');
-        console.log(`Tx Hash: ${res.data.txHash}`);
-        console.log(`Amount Sent: ${res.data.amount} ETH`);
+        if (res.data && res.data.txHash) {
+            console.log('✅ Unstake/Payout Successful!');
+            console.log(`Tx Hash: ${res.data.txHash}`);
+            console.log(`Amount Sent: ${res.data.amount} ETH`);
+        } else {
+            console.log('✅ Unstake requested. Result:', res.data.message || res.data);
+        }
+    } catch (e: any) {
+        console.log('❌ Error:', e.response ? e.response.data : e.message);
+    }
+}
+
+async function claimRewards(user: string) {
+    const stake_id = await ask('Enter Stake ID to claim from (leave empty to claim all): ');
+    try {
+        const payload: any = { user_id: user };
+        if (stake_id && stake_id.trim() !== '') payload.stake_id = stake_id;
+        console.log('Processing claim...');
+        const res = await axios.post(`${BASE}/stake/claim`, payload);
+        console.log('✅ Claim processed:', res.data);
     } catch (e: any) {
         console.log('❌ Error:', e.response ? e.response.data : e.message);
     }
@@ -80,8 +97,9 @@ async function main() {
     console.log(`\n--- Custodial Staking CLI (${currentUser}) ---`);
     console.log('1. View Portfolio (Floating Balance & Stakes)');
     console.log('2. Create New Stake');
-    console.log('3. Unstake & Claim (Trigger Payout)');
+    console.log('3. Unstake (Request Payout)');
     console.log('4. View Transaction Ledger');
+    console.log('5. Claim Rewards');
     console.log('8. Switch User');
     console.log('0. Exit');
     
@@ -94,6 +112,7 @@ async function main() {
         const res = await axios.get(`${BASE}/ledger`);
         console.log(res.data);
     }
+    else if (choice === '5') await claimRewards(currentUser);
     else if (choice === '8') currentUser = null;
     else if (choice === '0') process.exit(0);
   }

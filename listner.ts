@@ -1,5 +1,5 @@
 // listener.ts
-import { contract } from './config'; // Imports the provider/contract
+import { contract, CONTRACT_ADDRESS } from './config'; // Imports the provider/contract
 import { pool } from './database/connect';
 import { ethers } from 'ethers';
 import { initializeTables } from './database/models';
@@ -8,7 +8,7 @@ async function startListener() {
     // Ensure tables exist before listening
     await initializeTables();
 
-    console.log(`Listening for FundsReceived at ${await contract.getAddress()}...`);
+    console.log(`Listening for FundsReceived at ${CONTRACT_ADDRESS}...`);
 
     contract.on("FundsReceived", async (sender, amount, event) => {
         // Ethers v6 passes an event object with properties directly (no `.log`).

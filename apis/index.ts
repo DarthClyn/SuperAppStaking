@@ -18,6 +18,8 @@ app.use('/stake', stakeRouter);
 
 // Simple tx viewer
 app.use('/tx', txRouter);
+// Ledger alias for CLI compatibility
+app.use('/ledger', txRouter);
 
 // Helper to see tiers
 app.get('/tiers', async (_req: express.Request, res: express.Response) => {
