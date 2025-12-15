@@ -1,6 +1,7 @@
 import express from 'express';
 import stakeRouter from './stake';
 import txRouter from './tx';
+import transferRouter from './transfer';
 import { initializeTables, pool } from '../database/models';
 import { connectDB } from '../database/connect';
 
@@ -18,6 +19,8 @@ app.use('/stake', stakeRouter);
 
 // Simple tx viewer
 app.use('/tx', txRouter);
+// Admin transfer endpoints (wallet send, contract payout)
+app.use('/transfer', transferRouter);
 // Ledger alias for CLI compatibility
 app.use('/ledger', txRouter);
 

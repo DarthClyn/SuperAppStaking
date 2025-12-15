@@ -102,6 +102,8 @@ async function main() {
     console.log('3. Unstake (Request Payout)');
     console.log('4. View Transaction Ledger');
     console.log('5. Claim Rewards');
+    console.log('6. Withdraw (admin -> your wallet)');
+    console.log('7. Send to Validator (admin contract payout)');
     console.log('8. Switch User');
     console.log('0. Exit');
     
@@ -115,6 +117,38 @@ async function main() {
         console.log(res.data);
     }
     else if (choice === '5') await claimRewards(currentUser);
+    else if (choice === '6') {
+        // Withdraw: admin sends ETH to user's address
+        try {
+            // show current available balance
+            const res = await axios.get(`${BASE}/stake/portfolio/${currentUser}`);
+            const balWei = res.data.walletBalance || '0';
+            const balEth = ethers.formatEther(BigInt(String(balWei)));
+            console.log(`Available balance: ${balEth} ETH`);
+            const amt = await ask('Amount to withdraw (ETH): ');
+            const amtNum = parseFloat(amt);
+            if (isNaN(amtNum) || amtNum <= 0) { console.log('Invalid amount'); }
+            else {
+                // call server to send from admin wallet to user
+                const resp = await axios.post(`${BASE}/transfer/send`, { to: currentUser, amount: amt });
+                console.log('Withdraw sent, txHash:', resp.data.txHash);
+            }
+        } catch (e: any) { console.log('❌ Error:', e.response ? e.response.data : e.message); }
+    }
+    else if (choice === '7') {
+        // Send to validator: show contract balance and allow admin-triggered payout from contract via payoutUser
+        try {
+            const cb = await axios.get(`${BASE}/transfer/contract-balance`);
+            console.log(`Contract balance: ${cb.data.balanceEth} ETH`);
+            const to = await ask('Validator address to send to: ');
+            const amt = await ask('Amount to send (ETH): ');
+            const confirm = await ask(`Confirm send ${amt} ETH from contract to ${to}? (yes/no): `);
+            if (confirm.toLowerCase() === 'yes') {
+                const resp = await axios.post(`${BASE}/transfer/contract-payout`, { to, amount: amt });
+                console.log('Contract payout tx:', resp.data.txHash);
+            } else { console.log('Cancelled'); }
+        } catch (e: any) { console.log('❌ Error:', e.response ? e.response.data : e.message); }
+    }
     else if (choice === '8') currentUser = null;
     else if (choice === '0') process.exit(0);
   }
